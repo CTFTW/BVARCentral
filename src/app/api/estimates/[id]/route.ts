@@ -5,6 +5,7 @@ import { requireRole } from "@/lib/rbac";
 import { handleApiError, jsonError, writeAuditLog } from "@/lib/api-utils";
 import { sendEstimateEmail } from "@/lib/mailer";
 import { computeTimeEntryHours } from "@/lib/time-entries";
+import { resolveShopRate } from "@/lib/billing";
 
 const updateSchema = z.object({
   approvedNote: z.string().optional(),
@@ -43,7 +44,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!estimate) return jsonError("Not found", 404);
 
   const settings = await prisma.shopSettings.findUnique({ where: { id: "singleton" } });
-  const shopRate = Number(estimate.project.shopRateOverride ?? settings?.defaultShopRate ?? 95);
+  const shopRate = resolveShopRate(estimate.project.shopRateOverride, settings?.defaultShopRate);
 
   const estimatedLabor = estimate.lines
     .filter((l) => l.type === "LABOR")

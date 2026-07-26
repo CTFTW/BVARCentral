@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -8,11 +10,17 @@ export default async function ShopManagerDashboardPage() {
     where: { status: { in: ["ACTIVE", "ON_HOLD"] } },
     include: { vehicle: true, phases: true },
     orderBy: { createdAt: "desc" },
+    take: 100,
   });
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <h1 className="text-2xl font-semibold">Shop Manager Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Shop Manager Dashboard</h1>
+        <Link href="/dashboard/shop-manager/reports" className={buttonVariants({ size: "sm" })}>
+          Reports
+        </Link>
+      </div>
       <h2 className="text-lg font-medium">Work In Progress</h2>
       <div className="space-y-3">
         {projects.map((p) => {

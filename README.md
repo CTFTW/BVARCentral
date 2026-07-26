@@ -88,21 +88,34 @@ Seeded staff logins (password `ChangeMe123!` for all):
   `/api/invoices/[id]/send` emails the customer + creates an in-app
   notification. `/api/payments` supports partial payments.
 - **Dashboards**: role landing pages for Admin, Shop Manager, Parts Manager,
-  Technician, Front Desk, and the Customer portal (`/portal`).
+  Technician, Front Desk, and the Customer portal (`/portal`), plus an
+  in-app notification bell (`GET/PATCH /api/notifications`).
+- **Admin user management**: `/dashboard/admin/users` (backed by
+  `GET/POST /api/users`, `PATCH /api/users/[id]`) — activate self-registered
+  accounts and change roles.
+- **Reporting** (`/dashboard/shop-manager/reports`): job profitability
+  (estimated vs. actual), technician utilization (last 30 days), inventory
+  valuation (cost basis + selling value), and receivables aging (current /
+  31-60 / 61-90 / 90+ day buckets).
+- **Unit tests** (`npm run test`, Vitest): pure billing/pricing math
+  (`src/lib/billing.ts`) and time-entry hour calculation
+  (`src/lib/time-entries.ts`) are extracted from the route handlers and unit
+  tested — directly addressing the plan's "complex billing calculations
+  cause invoice errors" risk.
 - **Deployment**: `docker/Dockerfile` (dev + production standalone build),
-  `docker-compose.yml` (Node app + Postgres + Nginx), `docker/nginx.conf`,
-  `.devcontainer/`, and `.github/workflows/ci.yml`.
+  `docker-compose.yml` (Node app + Postgres + Nginx + migrate/certbot
+  services), `docker/nginx.conf`, `.devcontainer/`, and
+  `.github/workflows/ci.yml`.
 
-## What's left (Phase 3 and polish, per the plan)
+## What's left (Phase 3 polish, per the plan)
 
-- Admin user/role management UI, audit log viewer.
-- Reporting: job profitability, technician utilization, inventory valuation,
-  receivables aging.
+- Audit log viewer UI (the `AuditLog` model and writes already exist).
 - PWA/offline queue for time entries and part consumption with sync on
   reconnect.
 - Email templates beyond the current plain-HTML sends.
-- Production TLS (Let's Encrypt) wiring in `docker/nginx.conf` (scaffolded,
-  commented out until a real domain/cert exists).
+- Production TLS (Let's Encrypt) wiring in `docker/nginx.conf` (scaffolded;
+  run `docker compose --profile tls run --rm certbot` once a real domain
+  exists, then uncomment the HTTPS server block).
 - Automated Postgres backups to object storage.
-- Additional Vitest unit tests around billing/estimate math and Playwright
-  E2E coverage.
+- Playwright E2E coverage (Vitest unit coverage for billing/time-entry math
+  is in place).

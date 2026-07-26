@@ -1,26 +1,35 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { buttonVariants } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboardPage() {
-  const [userCount, activeProjects, pendingConsumptions] = await Promise.all([
-    prisma.user.count(),
+  const [userCount, inactiveUserCount, activeProjects, pendingConsumptions] = await Promise.all([
+    prisma.user.count({ where: { role: { not: "CUSTOMER" } } }),
+    prisma.user.count({ where: { role: { not: "CUSTOMER" }, active: false } }),
     prisma.project.count({ where: { status: "ACTIVE" } }),
     prisma.partConsumption.count({ where: { status: "PENDING" } }),
   ]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
-      <div className="grid grid-cols-3 gap-4">
-        <StatCard label="Users" value={userCount} />
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
+        <Link href="/dashboard/admin/users" className={buttonVariants({ size: "sm" })}>
+          Manage Users
+        </Link>
+      </div>
+      <div className="grid grid-cols-4 gap-4">
+        <StatCard label="Staff Users" value={userCount} />
+        <StatCard label="Awaiting Activation" value={inactiveUserCount} />
         <StatCard label="Active Projects" value={activeProjects} />
         <StatCard label="Pending Part Approvals" value={pendingConsumptions} />
       </div>
       <p className="text-sm text-muted-foreground">
-        User management, role management, system settings, and audit log views are next to be
-        built out on top of the existing API routes (/api/customers, /api/projects, /api/parts,
-        /api/part-consumptions, etc.) and the AuditLog model.
+        Role management and account activation (including self-registered Google sign-ins) are
+        available under Manage Users. System settings and a dedicated audit log viewer are next to
+        be built on top of the existing AuditLog model.
       </p>
     </div>
   );

@@ -3,7 +3,14 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/rbac";
 import { handleApiError, jsonError, writeAuditLog } from "@/lib/api-utils";
-import { computeTimeEntryHours } from "@/lib/time-entries";
+import {
+  buildLaborLines,
+  buildPartLines,
+  buildSpecialOrderLines,
+  computeInvoiceTotals,
+  formatInvoiceNumber,
+  resolveShopRate,
+} from "@/lib/billing";
 
 const schema = z.object({
   depositApplied: z.number().nonnegative().optional(),
@@ -44,55 +51,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (!cycle.project.vehicle.customer) throw new Error("NO_CUSTOMER");
 
       const settings = await tx.shopSettings.findUnique({ where: { id: "singleton" } });
-      const shopRate = Number(cycle.project.shopRateOverride ?? settings?.defaultShopRate ?? 95);
+      const shopRate = resolveShopRate(cycle.project.shopRateOverride, settings?.defaultShopRate);
 
-      const lines: {
-        type: "LABOR" | "PART" | "SPECIAL_ORDER" | "DEPOSIT";
-        description: string;
-        quantity: number;
-        unitPrice: number;
-        lineTotal: number;
-        jobPhaseId?: string;
-      }[] = [];
+      const lines = [
+        ...buildLaborLines(cycle.timeEntries, shopRate),
+        ...buildPartLines(cycle.partConsumptions),
+        ...buildSpecialOrderLines(cycle.specialOrderItems),
+      ];
 
-      for (const entry of cycle.timeEntries) {
-        const hours = computeTimeEntryHours(entry);
-        if (hours <= 0) continue;
-        lines.push({
-          type: "LABOR",
-          description: `Labor - ${entry.jobPhase.name}`,
-          quantity: hours,
-          unitPrice: shopRate,
-          lineTotal: hours * shopRate,
-          jobPhaseId: entry.jobPhaseId,
-        });
-      }
-
-      for (const c of cycle.partConsumptions) {
-        const unitPrice = Number(c.overridePrice ?? c.sellingPriceLockedAt ?? c.part?.sellingPrice ?? 0);
-        lines.push({
-          type: "PART",
-          description: `Part - ${c.part?.description ?? c.skuEntered}`,
-          quantity: c.quantity,
-          unitPrice,
-          lineTotal: unitPrice * c.quantity,
-          jobPhaseId: c.jobPhaseId,
-        });
-      }
-
-      for (const item of cycle.specialOrderItems) {
-        lines.push({
-          type: "SPECIAL_ORDER",
-          description: `Special Order - ${item.description} (${item.specialOrder.vendorName})`,
-          quantity: item.quantity,
-          unitPrice: Number(item.sellingPrice),
-          lineTotal: Number(item.sellingPrice) * item.quantity,
-        });
-      }
-
-      const subtotal = lines.reduce((sum, l) => sum + l.lineTotal, 0);
       const depositApplied = body.depositApplied ?? 0;
-      const total = subtotal - depositApplied;
+      const { subtotal, total, lines: lineItemsToCreate } = computeInvoiceTotals(lines, depositApplied);
 
       // Atomically increment a dedicated counter instead of COUNT(*)-ing the
       // Invoice table, avoiding a full-table scan inside this transaction
@@ -103,7 +71,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         update: { invoiceSequence: { increment: 1 } },
         select: { invoiceSequence: true },
       });
-      const invoiceNumber = `INV-${new Date().getFullYear()}-${String(nextSequence.invoiceSequence).padStart(5, "0")}`;
+      const invoiceNumber = formatInvoiceNumber(new Date().getFullYear(), nextSequence.invoiceSequence);
 
       const created = await tx.invoice.create({
         data: {
@@ -114,22 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           subtotal,
           depositApplied,
           total,
-          lineItems: {
-            create: [
-              ...lines,
-              ...(depositApplied > 0
-                ? [
-                    {
-                      type: "DEPOSIT" as const,
-                      description: "Deposit applied",
-                      quantity: 1,
-                      unitPrice: -depositApplied,
-                      lineTotal: -depositApplied,
-                    },
-                  ]
-                : []),
-            ],
-          },
+          lineItems: { create: lineItemsToCreate },
         },
         include: { lineItems: true },
       });

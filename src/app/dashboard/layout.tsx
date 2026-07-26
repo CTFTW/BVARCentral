@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { SignOutButton } from "@/components/sign-out-button";
+import { NotificationBell } from "@/components/notification-bell";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
@@ -10,7 +11,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <span className="text-sm text-muted-foreground">
           Signed in as {session?.user?.name ?? session?.user?.email} ({session?.user?.role})
         </span>
-        <SignOutButton />
+        <div className="flex items-center gap-2">
+          <NotificationBell />
+          <SignOutButton />
+        </div>
       </header>
       {children}
     </div>
