@@ -26,10 +26,10 @@ RUN npm ci --legacy-peer-deps
 # builder: build the Next.js app
 # ---------------------------------------------------------------------------
 FROM base AS builder
-ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --legacy-peer-deps
 COPY . .
+ENV NODE_ENV=production
 RUN npx prisma generate
 RUN npm run build
 
