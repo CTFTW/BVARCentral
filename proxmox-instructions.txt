@@ -1,0 +1,295 @@
+Deploying on Proxmox gives you full control. You have two main paths: **Docker-based** (using your existing setup) or **native deployment** (VM/LXC with direct Node.js + PostgreSQL). I'll cover both.
+
+## Option 1: Docker-Based (Recommended)
+
+This uses your existing `docker-compose.yml` and is the simplest path.
+
+### 1. Create a VM or LXC
+
+**VM (more isolation):**
+- Create a new VM in Proxmox
+- OS: Ubuntu Server 22.04/24.04 LTS or Debian 12
+- Resources: 2-4 vCPUs, 4-8 GB RAM, 40-80 GB disk
+- Network: Bridge mode (vmbr0)
+
+**LXC (lighter, faster):**
+- Template: Ubuntu 22.04/24.04 or Debian 12
+- Resources: 2 vCPUs, 4 GB RAM, 40 GB disk
+- Enable nesting: `Features > Nesting > Enabled` (required for Docker)
+- Network: Bridge mode (vmbr0)
+
+### 2. Install Docker
+
+```bash
+# Update system
+apt update && apt upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Add your user to docker group (optional)
+usermod -aG docker $USER
+newgrp docker
+
+# Install Docker Compose (if not included)
+apt install docker-compose-plugin -y
+```
+
+### 3. Deploy the Application
+
+```bash
+# Clone your repo
+cd /opt
+git clone <your-repo-url> restoration-erp
+cd restoration-erp
+
+# Create .env file
+cp .env.example .env
+nano .env
+```
+
+Edit `.env` with production values:
+```env
+DATABASE_URL="postgresql://postgres:your-strong-password@db:5432/restoration_erp?schema=public"
+NEXTAUTH_SECRET="generate-with: openssl rand -base64 32"
+NEXTAUTH_URL="https://yourdomain.com"
+POSTGRES_USER="postgres"
+POSTGRES_PASSWORD="your-strong-password"
+POSTGRES_DB="restoration_erp"
+GOOGLE_CLIENT_ID="your-google-client-id"
+GOOGLE_CLIENT_SECRET="your-google-client-secret"
+RESEND_API_KEY="your-resend-api-key"
+EMAIL_FROM="no-reply@yourdomain.com"
+DOMAIN="yourdomain.com"
+LETSENCRYPT_EMAIL="admin@yourdomain.com"
+```
+
+### 4. Start the Stack
+
+```bash
+# Build and start
+docker compose up -d
+
+# Run migrations
+docker compose exec app npx prisma migrate deploy
+
+# Seed initial data (admin, manager, tech, etc.)
+docker compose exec app npx prisma db seed
+
+# Check logs
+docker compose logs -f app
+```
+
+### 5. Enable HTTPS (Let's Encrypt)
+
+```bash
+# Obtain certificate
+docker compose --profile tls run --rm certbot
+
+# Edit nginx config
+nano docker/nginx.conf
+# Uncomment the HTTPS server block (lines 22-38)
+# Replace "your-domain.com" with your actual domain
+
+# Restart nginx
+docker compose restart nginx
+```
+
+### 6. Proxmox-Specific Configuration
+
+**Backup strategy:**
+```bash
+# Proxmox Backup Server (if available)
+# Or use vzdump for VM/LXC snapshots
+vzdump <VMID> --mode snapshot --storage <backup-storage>
+```
+
+**Resource monitoring:**
+- Install `qemu-guest-agent` (VM) or `lxc-pve` (LXC) for better Proxmox integration
+- Monitor via Proxmox web UI
+
+**Firewall:**
+- Enable Proxmox firewall at VM/LXC level
+- Allow only ports 80, 443, and SSH (22) from trusted networks
+
+## Option 2: Native Deployment (No Docker)
+
+If you prefer not to use Docker on the VM/LXC.
+
+### 1. Create VM/LXC (same as above)
+
+### 2. Install Dependencies
+
+```bash
+apt update && apt upgrade -y
+apt install -y postgresql postgresql-contrib nodejs npm nginx certbot python3-certbot-nginx
+
+# Install Node.js 20.x (if system version is older)
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+
+# Install PM2 globally
+npm install -g pm2
+```
+
+### 3. Configure PostgreSQL
+
+```bash
+# Create database and user
+sudo -u postgres psql
+
+CREATE DATABASE restoration_erp;
+CREATE USER restoration_user WITH PASSWORD 'your-strong-password';
+GRANT ALL PRIVILEGES ON DATABASE restoration_erp TO restoration_user;
+\q
+```
+
+### 4. Deploy the Application
+
+```bash
+cd /opt
+git clone <your-repo-url> restoration-erp
+cd restoration-erp
+
+# Install dependencies
+npm install --legacy-peer-deps
+
+# Create .env
+nano .env
+```
+
+Configure `.env`:
+```env
+DATABASE_URL="postgresql://restoration_user:your-strong-password@localhost:5432/restoration_erp?schema=public"
+NEXTAUTH_SECRET="generate-with: openssl rand -base64 32"
+NEXTAUTH_URL="https://yourdomain.com"
+GOOGLE_CLIENT_ID="your-google-client-id"
+GOOGLE_CLIENT_SECRET="your-google-client-secret"
+RESEND_API_KEY="your-resend-api-key"
+EMAIL_FROM="no-reply@yourdomain.com"
+```
+
+### 5. Build and Migrate
+
+```bash
+# Generate Prisma client
+npx prisma generate
+
+# Run migrations
+npx prisma migrate deploy
+
+# Seed data
+npm run db:seed
+
+# Build the app
+npm run build
+
+# Copy public folder to standalone
+cp -r public .next/standalone/public
+```
+
+### 6. Configure PM2
+
+Create `ecosystem.config.cjs`:
+```js
+module.exports = {
+  apps: [
+    {
+      name: "restoration-erp",
+      cwd: ".next/standalone",
+      script: "server.js",
+      env: {
+        NODE_ENV: "production",
+        PORT: 3000,
+      },
+      max_memory_restart: "512M",
+      instances: 2,  // Scale if you have multiple cores
+      exec_mode: "cluster",
+    },
+  ],
+};
+```
+
+Start the app:
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save
+pm2 startup  # Follow the printed instructions
+```
+
+### 7. Configure Nginx
+
+```bash
+nano /etc/nginx/sites-available/restoration-erp
+```
+
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    client_max_body_size 50M;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable and test:
+```bash
+ln -s /etc/nginx/sites-available/restoration-erp /etc/nginx/sites-enabled/
+nginx -t
+systemctl reload nginx
+```
+
+### 8. Enable HTTPS
+
+```bash
+certbot --nginx -d yourdomain.com -d www.yourdomain.com
+```
+
+### 9. Proxmox-Specific Configuration
+
+Same as Option 1:
+- Install guest agent for better monitoring
+- Configure backups via Proxmox Backup Server or vzdump
+- Enable firewall at VM/LXC level
+
+## Proxmox Best Practices
+
+**Storage:**
+- Use ZFS or Ceph for production (better snapshots, compression)
+- Allocate sufficient disk space (50-100 GB for growth)
+
+**Networking:**
+- Use a dedicated VLAN for production services if you have multiple VMs
+- Configure DNS records pointing to your Proxmox host's public IP
+
+**Security:**
+- Use Proxmox's built-in firewall or iptables
+- Restrict SSH access to key-based authentication
+- Keep the host and VMs updated with `apt update && apt upgrade`
+
+**Monitoring:**
+- Install `htop`, `iotop`, `iftop` for troubleshooting
+- Use Proxmox's built-in graphs for CPU/RAM/network monitoring
+- Consider setting up Prometheus + Grafana for advanced monitoring
+
+**Backups:**
+- Use Proxmox Backup Server (PBS) for incremental, deduplicated backups
+- Schedule daily snapshots via `vzdump` or PBS
+- Test restore procedures regularly
+
+**High Availability (optional):**
+- If you have multiple Proxmox nodes, configure HA for the VM/LXC
+- Use shared storage (Ceph, NFS) for failover
+
+The Docker-based approach is simpler and matches your existing infrastructure. The native approach gives you more control but requires manual maintenance of Node.js, PostgreSQL, and Nginx.
